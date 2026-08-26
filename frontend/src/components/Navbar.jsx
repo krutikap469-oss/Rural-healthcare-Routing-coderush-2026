@@ -8,15 +8,21 @@ export default function Navbar({
   onOpenEmergencyModal, 
   onOpenBenchmarkModal,
   isSidebarOpen,
-  onToggleSidebar
+  onToggleSidebar,
+  telemetryOverride = null
 }) {
   const ambulances = networkData?.ambulances || [];
   const hospitals = networkData?.hospitals || [];
   const blockedCount = networkData?.blocked_edges?.length || 0;
   
-  const idleAmbulances = ambulances.filter(a => a.status === 'IDLE').length;
-  const totalBeds = hospitals.reduce((sum, h) => sum + (h.beds_available || 0), 0);
-  const activeTripsCount = networkData?.active_trips?.length || 0;
+  const rawIdle = ambulances.filter(a => a.status === 'IDLE').length;
+  const rawBeds = hospitals.reduce((sum, h) => sum + (h.beds_available || 0), 0);
+  const rawTrips = networkData?.active_trips?.length || 0;
+
+  // Use telemetryOverride if in the middle of a staggered influx animation
+  const idleAmbulances = telemetryOverride?.idleAmbulances !== undefined ? telemetryOverride.idleAmbulances : rawIdle;
+  const totalBeds = telemetryOverride?.totalBeds !== undefined ? telemetryOverride.totalBeds : rawBeds;
+  const activeTripsCount = telemetryOverride?.activeTrips !== undefined ? telemetryOverride.activeTrips : rawTrips;
 
   return (
     <header className="h-16 bg-[#0a0f1d]/90 backdrop-blur-xl border-b border-slate-800/80 px-4 md:px-6 flex items-center justify-between z-40 sticky top-0 shadow-lg">
@@ -39,7 +45,7 @@ export default function Navbar({
         </div>
       </div>
 
-      {/* Center Live Telemetry Stat Pills (Simple English) */}
+      {/* Center Live Telemetry Stat Pills */}
       <div className="hidden lg:flex items-center gap-2.5">
         <div className="flex items-center gap-2 bg-slate-900/80 px-3 py-1.5 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 shadow-inner">
           <Truck className={`w-3.5 h-3.5 ${idleAmbulances > 0 ? 'text-cyan-400' : 'text-rose-400'}`} />
@@ -75,7 +81,7 @@ export default function Navbar({
         <button
           onClick={onReset}
           className="flex items-center gap-1 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-900/80 hover:bg-slate-800 rounded-xl border border-slate-800 hover:border-slate-700 transition-all active:scale-95 shadow-sm"
-          title="Reset the simulation back to starting values"
+          title="Reset simulation to default state (clears all logs and collapses panels)"
         >
           <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
           <span className="hidden sm:inline font-semibold">Reset</span>
@@ -97,14 +103,16 @@ export default function Navbar({
           <span>+ New Emergency Call</span>
         </button>
 
-        {/* Sidebar Toggle Button */}
-        <button
-          onClick={onToggleSidebar}
-          className="p-2 rounded-xl text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800 border border-slate-800 transition-colors ml-1 shadow-sm"
-          title={isSidebarOpen ? "Hide Side Details Panel" : "Show Side Details Panel"}
-        >
-          {isSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
-        </button>
+        {/* Sidebar Toggle Button (Only active when a request is active) */}
+        {onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            className="p-2 rounded-xl text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800 border border-slate-800 transition-colors ml-1 shadow-sm"
+            title={isSidebarOpen ? "Hide Side Details Panel" : "Show Side Details Panel"}
+          >
+            {isSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
+          </button>
+        )}
       </div>
     </header>
   );

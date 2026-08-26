@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip } from 'react-leaflet';
 import L from 'leaflet';
-import { Navigation, Building2, Home, Sparkles } from 'lucide-react';
+import { Navigation, Building2, Home, Sparkles, Layers, ArrowRight } from 'lucide-react';
 
 const createHospitalIcon = (isApex = false, availableBeds = 10) => {
   return L.divIcon({
@@ -25,7 +25,7 @@ const createHospitalIcon = (isApex = false, availableBeds = 10) => {
   });
 };
 
-const createVillageIcon = (isEmergency = false) => {
+const createVillageIcon = (isEmergency = false, label = '') => {
   return L.divIcon({
     className: 'custom-vill-icon',
     html: `
@@ -36,6 +36,7 @@ const createVillageIcon = (isEmergency = false) => {
             <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           </svg>
         </div>
+        ${label ? `<span class="absolute -top-2 -right-2 bg-rose-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full ring-1 ring-white">${label}</span>` : ''}
       </div>
     `,
     iconSize: [32, 32],
@@ -44,7 +45,7 @@ const createVillageIcon = (isEmergency = false) => {
   });
 };
 
-const createAmbulanceIcon = (status = 'IDLE') => {
+const createAmbulanceIcon = (status = 'IDLE', ambId = 1) => {
   const isEnRoute = status.startsWith('EN_ROUTE');
   return L.divIcon({
     className: 'custom-amb-icon',
@@ -59,6 +60,9 @@ const createAmbulanceIcon = (status = 'IDLE') => {
             <circle cx="17" cy="17" r="2"/>
           </svg>
         </div>
+        <span class="absolute -top-1 -right-1 bg-slate-900 text-cyan-300 text-[8px] font-mono font-bold px-1 rounded border border-cyan-500">
+          #${ambId}
+        </span>
       </div>
     `,
     iconSize: [36, 36],
@@ -67,18 +71,39 @@ const createAmbulanceIcon = (status = 'IDLE') => {
   });
 };
 
-export default function MapView({ networkData, onToggleRoadBlock, activeDecision }) {
+const ROUTE_COLORS = ['#06b6d4', '#ec4899', '#8b5cf6', '#10b981', '#f59e0b'];
+
+export default function MapView({ 
+  networkData, 
+  onToggleRoadBlock, 
+  activeDecision, 
+  multiDispatches = [],
+  activeVillageIds = [],
+  priorityQueueBanner = null
+}) {
   const mapCenter = [18.5204, 73.8567];
 
-  const activeRouteCoords = useMemo(() => {
-    if (!activeDecision) return null;
-    const ambToVil = activeDecision.ambulance_to_village?.coordinates || [];
-    const vilToHosp = activeDecision.village_to_hospital?.coordinates || [];
-    return {
-      leg1: ambToVil,
-      leg2: vilToHosp
-    };
-  }, [activeDecision]);
+  // Compile active routes (supports single activeDecision or multiple dispatches in Mass Influx)
+  const renderedRoutes = useMemo(() => {
+    if (multiDispatches && multiDispatches.length > 0) {
+      return multiDispatches.map((disp, idx) => ({
+        id: disp.request_id || idx,
+        color: ROUTE_COLORS[idx % ROUTE_COLORS.length],
+        leg1: disp.ambulance_to_village?.coordinates || [],
+        leg2: disp.village_to_hospital?.coordinates || [],
+        label: `${disp.patient_name.split(' ')[0]} (Amb #${disp.selected_ambulance?.id})`
+      }));
+    } else if (activeDecision) {
+      return [{
+        id: activeDecision.request_id,
+        color: '#06b6d4',
+        leg1: activeDecision.ambulance_to_village?.coordinates || [],
+        leg2: activeDecision.village_to_hospital?.coordinates || [],
+        label: activeDecision.patient_name
+      }];
+    }
+    return [];
+  }, [activeDecision, multiDispatches]);
 
   if (!networkData) {
     return (
@@ -96,6 +121,35 @@ export default function MapView({ networkData, onToggleRoadBlock, activeDecision
 
   return (
     <div className="relative h-full w-full overflow-hidden select-none">
+      {/* Priority Queue Ranking HUD (Visualizes the 400ms ranked triage before ambulance departure) */}
+      {priorityQueueBanner && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] bg-[#0a0f1d]/95 backdrop-blur-xl border border-cyan-500/60 rounded-2xl px-4 py-2.5 shadow-2xl shadow-cyan-950/80 animate-in fade-in slide-in-from-top-4 duration-300 max-w-xl w-[90%] pointer-events-auto">
+          <div className="flex items-center justify-between gap-2 mb-1.5 pb-1 border-b border-cyan-500/20">
+            <span className="text-xs font-bold text-cyan-300 font-mono flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              Priority Queue Evaluated: Ranked by Urgency SLA & Aging
+            </span>
+            <span className="text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-full border border-cyan-500/40">
+              OPTIMAL ORDER
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none text-[10px] font-mono">
+            {priorityQueueBanner.map((item, idx) => (
+              <div key={idx} className="flex items-center gap-1 shrink-0 bg-slate-900/90 px-2 py-1 rounded-lg border border-slate-800">
+                <span className="w-4 h-4 rounded-full bg-cyan-950 text-cyan-300 font-bold flex items-center justify-center text-[9px] border border-cyan-800">
+                  {idx + 1}
+                </span>
+                <span className="text-slate-200 font-semibold">{item.name}</span>
+                <span className={`px-1 py-0.2 rounded text-[8px] font-bold ${item.tier === 'T1' ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                  {item.tier}
+                </span>
+                {idx < priorityQueueBanner.length - 1 && <ArrowRight className="w-3 h-3 text-slate-600 ml-0.5" />}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <MapContainer
         center={mapCenter}
         zoom={12}
@@ -168,32 +222,32 @@ export default function MapView({ networkData, onToggleRoadBlock, activeDecision
           );
         })}
 
-        {/* 2. Active Dispatched Route Overlays */}
-        {activeRouteCoords && (
-          <>
-            {activeRouteCoords.leg1.length > 0 && (
+        {/* 2. Dispatched Route Overlays (Concurrent Multi-Route Support) */}
+        {renderedRoutes.map((rt) => (
+          <React.Fragment key={rt.id}>
+            {rt.leg1.length > 0 && (
               <Polyline
-                positions={activeRouteCoords.leg1}
+                positions={rt.leg1}
                 pathOptions={{
                   color: '#f59e0b',
-                  weight: 5.5,
-                  opacity: 0.95,
-                  dashArray: '8, 8'
+                  weight: 5,
+                  opacity: 0.9,
+                  dashArray: '6, 6'
                 }}
               />
             )}
-            {activeRouteCoords.leg2.length > 0 && (
+            {rt.leg2.length > 0 && (
               <Polyline
-                positions={activeRouteCoords.leg2}
+                positions={rt.leg2}
                 pathOptions={{
-                  color: '#06b6d4',
-                  weight: 6.5,
+                  color: rt.color,
+                  weight: 6,
                   opacity: 0.95
                 }}
               />
             )}
-          </>
-        )}
+          </React.Fragment>
+        ))}
 
         {/* 3. Hospital Nodes */}
         {hospitals.map((hosp) => {
@@ -248,14 +302,16 @@ export default function MapView({ networkData, onToggleRoadBlock, activeDecision
           );
         })}
 
-        {/* 4. Village Nodes */}
+        {/* 4. Village Nodes (with Influx Ripple State) */}
         {villages.map((vill) => {
-          const isEmergency = activeDecision && activeDecision.village_id === vill.node_id;
+          const isEmergency = activeVillageIds.includes(vill.node_id) || (activeDecision && activeDecision.village_id === vill.node_id);
+          const emergencyIndex = activeVillageIds.indexOf(vill.node_id);
+          const label = emergencyIndex >= 0 ? `#${emergencyIndex + 1}` : '';
           return (
             <Marker
               key={vill.id}
               position={[vill.lat, vill.lon]}
-              icon={createVillageIcon(isEmergency)}
+              icon={createVillageIcon(isEmergency, label)}
             >
               <Popup>
                 <div className="p-1 min-w-[190px] text-slate-100 font-sans">
@@ -292,7 +348,7 @@ export default function MapView({ networkData, onToggleRoadBlock, activeDecision
             <Marker
               key={amb.id}
               position={[lat, lon]}
-              icon={createAmbulanceIcon(amb.status)}
+              icon={createAmbulanceIcon(amb.status, amb.id)}
             >
               <Popup>
                 <div className="p-1 min-w-[210px] text-slate-100 font-sans">
@@ -310,7 +366,7 @@ export default function MapView({ networkData, onToggleRoadBlock, activeDecision
                     <div className="flex justify-between">
                       <span className="text-slate-400">Status:</span>
                       <strong className={amb.status === 'IDLE' ? 'text-emerald-400' : 'text-amber-400 animate-pulse'}>
-                        {amb.status === 'IDLE' ? 'Ready / Idle' : 'Driving to Patient'}
+                        {amb.status === 'IDLE' ? 'Ready / Idle' : 'Driving on Route'}
                       </strong>
                     </div>
                     {amb.assigned_request_id && (
@@ -331,7 +387,7 @@ export default function MapView({ networkData, onToggleRoadBlock, activeDecision
         })}
       </MapContainer>
 
-      {/* Floating Map Legend & Interactive Road Blocker Tool */}
+      {/* Floating Map Legend */}
       <div className="absolute bottom-4 left-4 z-[1000] bg-[#0a0f1d]/90 backdrop-blur-xl border border-slate-800/90 rounded-2xl p-3 shadow-2xl text-[11px] text-slate-300 font-mono space-y-2 pointer-events-auto max-w-xs">
         <div className="font-bold text-xs text-white uppercase tracking-wider flex items-center justify-between pb-1 border-b border-slate-800">
           <span className="flex items-center gap-1.5">
