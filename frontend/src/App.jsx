@@ -36,6 +36,7 @@ export default function App() {
 
   // Modals & Panels
   const [isEmergencyModalOpen, setIsEmergencyModalOpen] = useState(false);
+  const [selectedVillageForModal, setSelectedVillageForModal] = useState(null);
   const [isBenchmarkModalOpen, setIsBenchmarkModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeSideView, setActiveSideView] = useState('decision');
@@ -189,6 +190,10 @@ export default function App() {
             multiDispatches={multiDispatches}
             activeVillageIds={activeVillageIds}
             priorityQueueBanner={priorityQueueBanner}
+            onReportEmergency={(vId) => {
+              setSelectedVillageForModal(vId);
+              setIsEmergencyModalOpen(true);
+            }}
           />
         </div>
 
@@ -278,8 +283,12 @@ export default function App() {
       {/* Interactive Modals */}
       <EmergencyModal
         isOpen={isEmergencyModalOpen}
-        onClose={() => setIsEmergencyModalOpen(false)}
+        onClose={() => {
+          setIsEmergencyModalOpen(false);
+          setSelectedVillageForModal(null);
+        }}
         villages={networkData?.villages || []}
+        initialVillageId={selectedVillageForModal}
         onDispatch={handleManualDispatch}
       />
 

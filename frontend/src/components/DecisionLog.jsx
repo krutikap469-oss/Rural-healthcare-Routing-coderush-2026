@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { XCircle, ShieldCheck, Activity, FileText, CheckCircle2, Stethoscope, MapPin, Zap, Users } from 'lucide-react';
+import { XCircle, ShieldCheck, Activity, FileText, CheckCircle2, Stethoscope, MapPin, Zap, Users, Scale, Clock, Calculator } from 'lucide-react';
 import { URGENCY_TIERS } from '../utils/constants';
 
 export default function DecisionLog({ activeDecision, multiDispatches = [], selectedMultiIndex = 0, onSelectMultiIndex }) {
@@ -8,7 +8,6 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
     ? (multiDispatches[selectedMultiIndex] || multiDispatches[0])
     : activeDecision;
 
-  // Staggered reveal state: controls how many breadcrumb steps are visible
   const [visibleStepCount, setVisibleStepCount] = useState(0);
   const [showRejection, setShowRejection] = useState(false);
 
@@ -22,11 +21,9 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
     const breadcrumbs = currentDecision.decision_breadcrumbs || [];
     const totalSteps = breadcrumbs.length;
 
-    // Reset on new decision
     setVisibleStepCount(0);
     setShowRejection(false);
 
-    // Stagger each breadcrumb step one-by-one (~550ms delay)
     const timers = [];
     for (let i = 1; i <= totalSteps; i++) {
       const timer = setTimeout(() => {
@@ -35,7 +32,6 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
       timers.push(timer);
     }
 
-    // Reveal Constraint Rejection log after all steps finish + ~400ms delay
     const rejectionTimer = setTimeout(() => {
       setShowRejection(true);
     }, (totalSteps * 550) + 400);
@@ -54,7 +50,7 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
         </div>
         <h3 className="text-sm font-bold text-slate-200 mb-1.5">Waiting for an Emergency Call</h3>
         <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-4">
-          Click any <strong className="text-cyan-300">1-Click Demo Scenario</strong> above to see why the smart system chooses a specific hospital!
+          Click any <strong className="text-cyan-300">1-Click Demo Scenario</strong> above or click any village on the map to trigger a real dispatch!
         </p>
       </div>
     );
@@ -72,15 +68,18 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
     total_travel_time_mins,
     triage_wait_time_mins,
     total_cost_score,
+    cost_breakdown,
     decision_breadcrumbs = [],
-    rejected_candidates = []
+    rejected_candidates = [],
+    status
   } = currentDecision;
 
   const tier = URGENCY_TIERS[urgency_tier] || URGENCY_TIERS.T2;
+  const isAwaitingAmbulance = (status === 'AWAITING_AMBULANCE');
 
   return (
     <div className="h-full flex flex-col bg-[#0a0f1d] overflow-y-auto">
-      {/* If Multi-Village Influx is active, render the 5 patient selector pill tabs */}
+      {/* Multi-Village Influx Patient Selector Tabs */}
       {multiDispatches.length > 1 && (
         <div className="bg-slate-950/90 border-b border-slate-800 p-2 px-3">
           <div className="flex items-center justify-between text-[10px] font-mono font-bold text-slate-400 mb-1.5">
@@ -92,7 +91,6 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
           </div>
           <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
             {multiDispatches.map((disp, idx) => {
-              const dTier = URGENCY_TIERS[disp.urgency_tier] || URGENCY_TIERS.T2;
               const isSelected = idx === selectedMultiIndex;
               return (
                 <button
@@ -161,53 +159,127 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
       </motion.div>
 
       <div className="p-4 space-y-4 flex-1">
-        {/* Selected Optimal Candidate Hero Box */}
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.35, delay: 0.1 }}
-          className="bg-gradient-to-br from-cyan-950/50 via-slate-900 to-slate-950 border border-cyan-500/40 rounded-2xl p-4 space-y-3 shadow-xl shadow-cyan-950/30"
-        >
-          <div className="flex items-center justify-between pb-2 border-b border-cyan-500/20">
-            <span className="text-xs font-bold text-cyan-300 font-mono flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-cyan-400" />
-              Best Hospital & Ambulance Match
-            </span>
-            <span className="text-xs font-mono font-extrabold bg-cyan-500/20 text-cyan-300 px-2.5 py-0.5 rounded-full border border-cyan-500/40">
-              Score: {total_cost_score}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-            <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
-              <span className="text-[10px] text-slate-400 font-mono block mb-0.5">SELECTED HOSPITAL</span>
-              <strong className="text-slate-100 text-xs block">{selected_hospital?.name}</strong>
-              <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1 mt-1">
-                <CheckCircle2 className="w-3 h-3" /> Has Required Specialist Doctor
+        {/* Awaiting Ambulance Alert Card (If Fleet is Full) */}
+        {isAwaitingAmbulance ? (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-amber-950/20 border border-amber-500/40 rounded-2xl p-4 space-y-2 text-xs font-mono"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-amber-300 font-bold flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-amber-400 animate-spin" />
+                STATUS: AWAITING AMBULANCE
+              </span>
+              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/40 font-bold">
+                PRIORITY HEAP
+              </span>
+            </div>
+            <p className="text-slate-300 text-[11px] leading-relaxed">
+              All district ambulances are currently occupied. Request has been enqueued in the Binary Heap. It will be dispatched automatically as soon as any ambulance returns to IDLE.
+            </p>
+          </motion.div>
+        ) : (
+          /* Selected Optimal Candidate Hero Box */
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.35, delay: 0.1 }}
+            className="bg-gradient-to-br from-cyan-950/50 via-slate-900 to-slate-950 border border-cyan-500/40 rounded-2xl p-4 space-y-3 shadow-xl shadow-cyan-950/30"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-cyan-500/20">
+              <span className="text-xs font-bold text-cyan-300 font-mono flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                Best Hospital & Ambulance Match
+              </span>
+              <span className="text-xs font-mono font-extrabold bg-cyan-500/20 text-cyan-300 px-2.5 py-0.5 rounded-full border border-cyan-500/40">
+                Final Cost: {total_cost_score}
               </span>
             </div>
 
-            <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
-              <span className="text-[10px] text-slate-400 font-mono block mb-0.5">DISPATCHED AMBULANCE</span>
-              <strong className="text-slate-100 text-xs block">Ambulance #{selected_ambulance?.id}</strong>
-              <span className="text-[10px] text-cyan-300 font-mono mt-1 block">
-                {selected_ambulance?.plate} ({selected_ambulance?.type})
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-slate-400 font-mono block mb-0.5">SELECTED HOSPITAL</span>
+                <strong className="text-slate-100 text-xs block">{selected_hospital?.name}</strong>
+                <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1 mt-1">
+                  <CheckCircle2 className="w-3 h-3" /> Has Required Specialist Doctor
+                </span>
+              </div>
+
+              <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-slate-400 font-mono block mb-0.5">DISPATCHED AMBULANCE</span>
+                <strong className="text-slate-100 text-xs block">Ambulance #{selected_ambulance?.id}</strong>
+                <span className="text-[10px] text-cyan-300 font-mono mt-1 block">
+                  {selected_ambulance?.plate} ({selected_ambulance?.type})
+                </span>
+              </div>
+            </div>
+
+            {/* Transit Time Badges */}
+            <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
+              <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
+                <span className="text-slate-400">Driving Time:</span>
+                <strong className="text-cyan-400 font-bold">{total_travel_time_mins} mins</strong>
+              </div>
+              <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
+                <span className="text-slate-400">Hospital Wait:</span>
+                <strong className="text-amber-400 font-bold">{triage_wait_time_mins} mins</strong>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Formal Mathematical Cost Breakdown (Requirement 7 & 8) */}
+        {cost_breakdown && (
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3.5 space-y-2.5 font-mono text-xs shadow-sm">
+            <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+              <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                <Calculator className="w-3.5 h-3.5 text-cyan-400" />
+                Cost Function Breakdown:
+              </span>
+              <span className="text-[10px] text-slate-500">w1·T + w2·W + w3·F - w4·U</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              <div className="bg-slate-950/60 p-2 rounded-xl border border-slate-800/80">
+                <span className="text-slate-500 text-[10px] block">TRAVEL TIME (w1=1.0)</span>
+                <strong className="text-cyan-300">+{cost_breakdown.w1_travel_term}</strong>
+                <span className="text-slate-500 text-[9px] block">({cost_breakdown.travel_time_mins}m)</span>
+              </div>
+
+              <div className="bg-slate-950/60 p-2 rounded-xl border border-slate-800/80">
+                <span className="text-slate-500 text-[10px] block">WAIT TIME (w2=1.2)</span>
+                <strong className="text-amber-300">+{cost_breakdown.w2_wait_term}</strong>
+                <span className="text-slate-500 text-[9px] block">({cost_breakdown.triage_wait_mins}m)</span>
+              </div>
+
+              <div className="bg-slate-950/60 p-2 rounded-xl border border-slate-800/80">
+                <span className="text-slate-500 text-[10px] block">FAIRNESS ADJ (w3=0.5)</span>
+                <strong className={cost_breakdown.w3_fairness_term <= 0 ? 'text-emerald-400' : 'text-slate-300'}>
+                  {cost_breakdown.w3_fairness_term > 0 ? `+${cost_breakdown.w3_fairness_term}` : cost_breakdown.w3_fairness_term}
+                </strong>
+                <span className="text-slate-500 text-[9px] block">({cost_breakdown.is_underserved ? 'Fairness Boost' : 'Normal'})</span>
+              </div>
+
+              <div className="bg-slate-950/60 p-2 rounded-xl border border-slate-800/80">
+                <span className="text-slate-500 text-[10px] block">URGENCY BOOST (w4=4.0)</span>
+                <strong className="text-rose-400">{cost_breakdown.w4_urgency_term}</strong>
+                <span className="text-slate-500 text-[9px] block">({urgency_tier} Discount)</span>
+              </div>
+            </div>
+
+            {/* Fairness Statistics Indicator (Requirement 8) */}
+            <div className="bg-slate-950/40 p-2 rounded-xl border border-slate-800/60 flex items-center justify-between text-[10px]">
+              <span className="text-slate-400 flex items-center gap-1">
+                <Scale className="w-3 h-3 text-cyan-400" />
+                Village Wait: <strong className="text-white">{cost_breakdown.village_avg_wait_mins}m</strong> (Net Avg: {cost_breakdown.network_avg_wait_mins}m)
+              </span>
+              <span className={`px-1.5 py-0.5 rounded font-bold ${cost_breakdown.is_underserved ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                {cost_breakdown.is_underserved ? '⚖️ Underserved Village Boost' : 'Balanced'}
               </span>
             </div>
           </div>
-
-          {/* Transit Time Badges */}
-          <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
-            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
-              <span className="text-slate-400">Driving Time:</span>
-              <strong className="text-cyan-400 font-bold">{total_travel_time_mins} mins</strong>
-            </div>
-            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
-              <span className="text-slate-400">Hospital Wait:</span>
-              <strong className="text-amber-400 font-bold">{triage_wait_time_mins} mins</strong>
-            </div>
-          </div>
-        </motion.div>
+        )}
 
         {/* Step-by-Step Staggered Live Reasoning Breadcrumbs */}
         <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3.5">
@@ -245,7 +317,7 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
           </div>
         </div>
 
-        {/* Why Were Other Facilities Skipped? (Delayed Reveal) */}
+        {/* Why Were Other Facilities Skipped? */}
         <AnimatePresence>
           {showRejection && rejected_candidates.length > 0 && (
             <motion.div 

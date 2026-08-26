@@ -3,27 +3,27 @@ from core.graph import RoadGraph
 from core.router import GraphRouter, PathResult
 
 URGENCY_CONFIG = {
-    "T1": {
-        "name": "Tier 1 - Immediate / Critical",
-        "color": "#ef4444",
-        "max_sla_mins": 20.0,
-        "cost_multiplier": 2.5,
-        "wait_penalty_per_min": 5.0
-    },
-    "T2": {
-        "name": "Tier 2 - Urgent / Moderate",
-        "color": "#f59e0b",
-        "max_sla_mins": 45.0,
-        "cost_multiplier": 1.5,
-        "wait_penalty_per_min": 2.0
-    },
-    "T3": {
-        "name": "Tier 3 - Standard / Stable",
-        "color": "#10b981",
-        "max_sla_mins": 90.0,
-        "cost_multiplier": 1.0,
-        "wait_penalty_per_min": 1.0
-    }
+  "T1": {
+    "name": "Tier 1 - Immediate / Critical",
+    "color": "#ef4444",
+    "max_sla_mins": 20.0,
+    "urgency_boost_mult": 3.0,
+    "base_priority_score": 100.0
+  },
+  "T2": {
+    "name": "Tier 2 - Urgent / Moderate",
+    "color": "#f59e0b",
+    "max_sla_mins": 45.0,
+    "urgency_boost_mult": 1.5,
+    "base_priority_score": 50.0
+  },
+  "T3": {
+    "name": "Tier 3 - Standard / Stable",
+    "color": "#10b981",
+    "max_sla_mins": 90.0,
+    "urgency_boost_mult": 0.0,
+    "base_priority_score": 20.0
+  }
 }
 
 class DispatchDecision:
@@ -42,6 +42,7 @@ class DispatchDecision:
                  total_travel_time_mins: float,
                  triage_wait_time_mins: float,
                  total_cost_score: float,
+                 cost_breakdown: Dict[str, Any],
                  decision_breadcrumbs: List[Dict[str, Any]],
                  rejected_candidates: List[Dict[str, Any]],
                  status: str = "DISPATCHED"):
@@ -59,6 +60,7 @@ class DispatchDecision:
         self.total_travel_time_mins = round(total_travel_time_mins, 2)
         self.triage_wait_time_mins = round(triage_wait_time_mins, 2)
         self.total_cost_score = round(total_cost_score, 2)
+        self.cost_breakdown = cost_breakdown
         self.decision_breadcrumbs = decision_breadcrumbs
         self.rejected_candidates = rejected_candidates
         self.status = status
@@ -79,6 +81,7 @@ class DispatchDecision:
             "total_travel_time_mins": self.total_travel_time_mins,
             "triage_wait_time_mins": self.triage_wait_time_mins,
             "total_cost_score": self.total_cost_score,
+            "cost_breakdown": self.cost_breakdown,
             "decision_breadcrumbs": self.decision_breadcrumbs,
             "rejected_candidates": self.rejected_candidates,
             "status": self.status
@@ -88,6 +91,29 @@ class MultiConstraintDispatcher:
     def __init__(self, graph: RoadGraph, router: GraphRouter):
         self.graph = graph
         self.router = router
+        
+        # In-memory rolling wait time statistics per village (Requirement 8)
+        self.village_stats: Dict[str, Dict[str, Any]] = {
+            "NODE_VILL_A": {"total_wait_mins": 45.0, "request_count": 3, "avg_wait_mins": 15.0},
+            "NODE_VILL_PIR": {"total_wait_mins": 67.2, "request_count": 3, "avg_wait_mins": 22.4}, # Underserved
+            "NODE_VILL_KASAR": {"total_wait_mins": 26.0, "request_count": 2, "avg_wait_mins": 13.0},
+            "NODE_VILL_MUL": {"total_wait_mins": 32.0, "request_count": 2, "avg_wait_mins": 16.0},
+            "NODE_VILL_LAV": {"total_wait_mins": 18.0, "request_count": 2, "avg_wait_mins": 9.0},
+            "NODE_VILL_SHIV": {"total_wait_mins": 28.0, "request_count": 2, "avg_wait_mins": 14.0}
+        }
+
+    def get_network_average_wait(self) -> float:
+        avgs = [s["avg_wait_mins"] for s in self.village_stats.values() if s["request_count"] > 0]
+        return round(sum(avgs) / max(len(avgs), 1), 1)
+
+    def record_trip_completion(self, village_id: str, actual_wait_mins: float):
+        if village_id not in self.village_stats:
+            self.village_stats[village_id] = {"total_wait_mins": 0.0, "request_count": 0, "avg_wait_mins": 15.0}
+        
+        stat = self.village_stats[village_id]
+        stat["total_wait_mins"] += actual_wait_mins
+        stat["request_count"] += 1
+        stat["avg_wait_mins"] = round(stat["total_wait_mins"] / stat["request_count"], 1)
 
     def dispatch(self, 
                  request_id: str,
@@ -106,22 +132,31 @@ class MultiConstraintDispatcher:
         village_name = village_node.get("name", village_id)
         urgency_info = URGENCY_CONFIG.get(urgency_tier, URGENCY_CONFIG["T2"])
         
+        # 1. Rolling Fairness Statistics
+        village_stat = self.village_stats.get(village_id, {"avg_wait_mins": 15.0, "request_count": 1})
+        v_avg_wait = village_stat["avg_wait_mins"]
+        net_avg_wait = self.get_network_average_wait()
+        delta_fairness = v_avg_wait - net_avg_wait
+        is_underserved = (delta_fairness > 0)
+
         breadcrumbs = []
         rejected = []
 
+        # Step 1: Emergency Triaged & Fairness Audit
         breadcrumbs.append({
             "step": 1,
-            "title": "Emergency Triaged",
-            "detail": f"Patient '{patient_name}' at {village_name} reported {specialty_needed} emergency ({urgency_info['name']}). Required medicine: {medicine_needed or 'None'}."
+            "title": "Emergency Triaged & Fairness Evaluated",
+            "detail": f"Patient '{patient_name}' at {village_name} reported {specialty_needed} emergency ({urgency_info['name']}). Village historical wait: {v_avg_wait}m vs District avg: {net_avg_wait}m ({'Underserved → Fairness Boost Applied' if is_underserved else 'Standard Triage'})."
         })
 
+        # Step 2: Multi-Constraint Hospital Filtering (Specialist, Bed, Medicine)
         qualified_hospitals = []
         for hid, hdata in hospitals.items():
             active_specialists = hdata.get("specialists_on_duty", [])
             has_specialist = (specialty_needed == "General") or (specialty_needed in active_specialists)
             
             available_beds = hdata.get("beds_available", 0)
-            has_bed = available_beds > 0
+            has_bed = (available_beds > 0)
 
             has_medicine = True
             if medicine_needed:
@@ -162,10 +197,11 @@ class MultiConstraintDispatcher:
             breadcrumbs.append({
                 "step": 3,
                 "title": "Dispatcher Alert: No Qualified Facility Found",
-                "detail": "CRITICAL: All hospitals lack required specialist, bed, or medicine stock."
+                "detail": "CRITICAL: All hospitals lack required specialist, bed, or medicine stock. Request queued."
             })
             return None
 
+        # Check Available Ambulances
         available_ambulances = []
         for aid, adata in ambulances.items():
             if adata.get("status") == "IDLE":
@@ -175,9 +211,16 @@ class MultiConstraintDispatcher:
             breadcrumbs.append({
                 "step": 3,
                 "title": "Fleet Alert: All Ambulances Occupied",
-                "detail": "No idle ambulances available in district network. Queueing request."
+                "detail": "All fleet ambulances currently busy on calls. Request placed into priority queue."
             })
             return None
+
+        # Step 3: Formal Cost Function Optimization
+        # Cost = w1 * travelTime + w2 * waitTime + w3 * fairnessPenalty - w4 * urgencyBoost
+        w1 = 1.0  # Travel time weight
+        w2 = 1.2  # Triage wait time weight
+        w3 = 0.5  # Fairness penalty/boost weight
+        w4 = 4.0  # Urgency discount weight
 
         best_candidate = None
         min_total_cost = float("inf")
@@ -204,11 +247,16 @@ class MultiConstraintDispatcher:
 
                 travel_time = path_amb_to_vil.total_time_mins + path_vil_to_hosp.total_time_mins
                 triage_wait = hdata.get("current_triage_wait_mins", 5.0)
+                urgency_boost = urgency_info["urgency_boost_mult"]
                 
-                cost_score = (travel_time * urgency_info["cost_multiplier"]) + (triage_wait * urgency_info["wait_penalty_per_min"])
+                # Fairness adjustment: if village has waited longer, delta_fairness > 0 -> subtract cost
+                fairness_term = - (w3 * delta_fairness)
+                urgency_term = - (w4 * urgency_boost)
+                
+                final_cost = (w1 * travel_time) + (w2 * triage_wait) + fairness_term + urgency_term
 
-                if cost_score < min_total_cost:
-                    min_total_cost = cost_score
+                if final_cost < min_total_cost:
+                    min_total_cost = final_cost
                     best_candidate = {
                         "hospital": hdata,
                         "ambulance": adata,
@@ -216,7 +264,23 @@ class MultiConstraintDispatcher:
                         "path_vil_to_hosp": path_vil_to_hosp,
                         "travel_time": travel_time,
                         "triage_wait": triage_wait,
-                        "cost_score": cost_score
+                        "cost_breakdown": {
+                            "w1_travel_term": round(w1 * travel_time, 2),
+                            "w2_wait_term": round(w2 * triage_wait, 2),
+                            "w3_fairness_term": round(fairness_term, 2),
+                            "w4_urgency_term": round(urgency_term, 2),
+                            "w1": w1,
+                            "w2": w2,
+                            "w3": w3,
+                            "w4": w4,
+                            "travel_time_mins": round(travel_time, 2),
+                            "triage_wait_mins": round(triage_wait, 2),
+                            "village_avg_wait_mins": v_avg_wait,
+                            "network_avg_wait_mins": net_avg_wait,
+                            "delta_fairness": round(delta_fairness, 1),
+                            "is_underserved": is_underserved,
+                            "final_cost": round(final_cost, 2)
+                        }
                     }
 
         if not best_candidate:
@@ -224,16 +288,18 @@ class MultiConstraintDispatcher:
 
         hosp = best_candidate["hospital"]
         amb = best_candidate["ambulance"]
+        breakdown = best_candidate["cost_breakdown"]
         
         breadcrumbs.append({
             "step": 3,
-            "title": "A* Pathfinding & Cost Optimization",
-            "detail": f"Evaluated candidate paths. Selected {hosp['name']} and Ambulance #{amb['id']} with optimal combined travel time of {best_candidate['travel_time']} mins."
+            "title": "A* Pathfinding & Composite Cost Optimization",
+            "detail": f"Computed A* path. Cost formula: ({breakdown['w1_travel_term']} Travel) + ({breakdown['w2_wait_term']} Wait) + ({breakdown['w3_fairness_term']} Fairness) + ({breakdown['w4_urgency_term']} Urgency) = Final Score: {breakdown['final_cost']}."
         })
+        
         breadcrumbs.append({
             "step": 4,
             "title": "Resource Lock & Dispatch Triggered",
-            "detail": f"Locked 1 bed at {hosp['name']}. Reserved {medicine_needed or 'standard triage kit'}. Ambulance #{amb['id']} dispatched en route to {village_name}."
+            "detail": f"Assigned Ambulance #{amb['id']} ({amb['type']}). Locked 1 bed at {hosp['name']} and reserved {medicine_needed or 'standard triage kit'}."
         })
 
         return DispatchDecision(
@@ -250,7 +316,8 @@ class MultiConstraintDispatcher:
             village_to_hospital_path=best_candidate["path_vil_to_hosp"],
             total_travel_time_mins=best_candidate["travel_time"],
             triage_wait_time_mins=best_candidate["triage_wait"],
-            total_cost_score=best_candidate["cost_score"],
+            total_cost_score=breakdown["final_cost"],
+            cost_breakdown=breakdown,
             decision_breadcrumbs=breadcrumbs,
             rejected_candidates=rejected,
             status="DISPATCHED"

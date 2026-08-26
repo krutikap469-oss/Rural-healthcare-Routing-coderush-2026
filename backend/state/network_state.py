@@ -1,17 +1,17 @@
 import uuid
 import time
 import math
+import heapq
 import copy
 import random
 from typing import Dict, List, Any, Optional
 from core.graph import RoadGraph
 from core.router import GraphRouter, PathResult
-from core.matcher import MultiConstraintDispatcher, DispatchDecision
+from core.matcher import MultiConstraintDispatcher, DispatchDecision, URGENCY_CONFIG
 from core.generator import generate_district_network
 from state.db import save_dispatch_log, get_recent_logs
 
 def calculate_bearing(lat1, lon1, lat2, lon2):
-    """Calculate forward azimuth / bearing in degrees between two GPS coordinates."""
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
     delta_lambda = math.radians(lon2 - lon1)
@@ -23,7 +23,6 @@ def calculate_bearing(lat1, lon1, lat2, lon2):
     return round(bearing_deg, 1)
 
 def haversine_distance(lat1, lon1, lat2, lon2):
-    """Calculate distance in km between two GPS coordinates."""
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -34,7 +33,6 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 def interpolate_polyline(coords: List[List[float]], sub_steps: int = 5) -> List[List[float]]:
-    """Interpolate smooth micro-GPS coordinates between consecutive road nodes."""
     if not coords or len(coords) < 2:
         return coords
     
@@ -50,6 +48,44 @@ def interpolate_polyline(coords: List[List[float]], sub_steps: int = 5) -> List[
     micro_coords.append(coords[-1])
     return micro_coords
 
+class QueuedEmergency:
+    """Wrapper for heap-based Priority Queue with dynamic aging and fairness."""
+    def __init__(self, request_id: str, patient_name: str, village_id: str, urgency_tier: str, specialty_needed: str, medicine_needed: Optional[str], created_at: float, fairness_boost: float = 0.0):
+        self.request_id = request_id
+        self.patient_name = patient_name
+        self.village_id = village_id
+        self.urgency_tier = urgency_tier
+        self.specialty_needed = specialty_needed
+        self.medicine_needed = medicine_needed
+        self.created_at = created_at
+        self.fairness_boost = fairness_boost
+        self.base_score = URGENCY_CONFIG.get(urgency_tier, {}).get("base_priority_score", 50.0)
+
+    def calculate_effective_priority(self) -> float:
+        waiting_sec = max(0.0, time.time() - self.created_at)
+        # Aging factor: +0.5 priority score per second waiting in queue
+        aging_score = 0.5 * waiting_sec
+        return self.base_score + aging_score + self.fairness_boost
+
+    def __lt__(self, other):
+        # Higher effective priority should be popped first in min-heap (hence compare >)
+        return self.calculate_effective_priority() > other.calculate_effective_priority()
+
+    def to_dict(self) -> Dict[str, Any]:
+        waiting_sec = round(time.time() - self.created_at, 1)
+        effective = round(self.calculate_effective_priority(), 1)
+        return {
+            "request_id": self.request_id,
+            "patient_name": self.patient_name,
+            "village_id": self.village_id,
+            "urgency_tier": self.urgency_tier,
+            "specialty_needed": self.specialty_needed,
+            "medicine_needed": self.medicine_needed,
+            "waiting_seconds": waiting_sec,
+            "effective_priority": effective,
+            "status": "AWAITING_AMBULANCE"
+        }
+
 class NetworkStateManager:
     def __init__(self):
         self.reset_to_seed()
@@ -59,7 +95,7 @@ class NetworkStateManager:
         self.router = GraphRouter(self.graph)
         self.dispatcher = MultiConstraintDispatcher(self.graph, self.router)
         self.active_trips: Dict[str, Dict[str, Any]] = {}
-        self.request_queue: List[Dict[str, Any]] = []
+        self.request_queue: List[QueuedEmergency] = []
         self.latest_decisions: List[Dict[str, Any]] = []
 
     def dispatch_emergency(self, 
@@ -83,22 +119,54 @@ class NetworkStateManager:
         )
 
         if not decision:
-            queue_item = {
+            # Check village fairness for queue boost
+            v_stat = self.dispatcher.village_stats.get(village_id, {"avg_wait_mins": 15.0})
+            fairness_boost = 10.0 if v_stat["avg_wait_mins"] > self.dispatcher.get_network_average_wait() else 0.0
+            
+            queue_item = QueuedEmergency(
+                request_id=req_id,
+                patient_name=patient_name,
+                village_id=village_id,
+                urgency_tier=urgency_tier,
+                specialty_needed=specialty_needed,
+                medicine_needed=medicine_needed,
+                created_at=time.time(),
+                fairness_boost=fairness_boost
+            )
+            heapq.heappush(self.request_queue, queue_item)
+
+            failure_decision = {
                 "request_id": req_id,
                 "patient_name": patient_name,
                 "village_id": village_id,
+                "village_name": self.graph.nodes.get(village_id, {}).get("name", village_id),
                 "urgency_tier": urgency_tier,
                 "specialty_needed": specialty_needed,
                 "medicine_needed": medicine_needed,
-                "status": "QUEUED",
-                "timestamp": time.time()
+                "status": "AWAITING_AMBULANCE",
+                "message": "All ambulances currently occupied or no qualifying facility free. Request placed in dynamic priority queue.",
+                "effective_priority": queue_item.calculate_effective_priority(),
+                "decision_breadcrumbs": [
+                    {
+                        "step": 1,
+                        "title": "Emergency Triaged",
+                        "detail": f"Urgency: {urgency_tier}. Required Doctor: {specialty_needed}. Required Medicine: {medicine_needed or 'N/A'}."
+                    },
+                    {
+                        "step": 2,
+                        "title": "Fleet / Bed Constraint Check",
+                        "detail": "Zero idle ambulances available in district fleet."
+                    },
+                    {
+                        "step": 3,
+                        "title": "Priority Queue Enqueued",
+                        "detail": f"Placed in Priority Heap with effective score of {round(queue_item.calculate_effective_priority(), 1)}. Will auto-escalate with aging factor."
+                    }
+                ],
+                "rejected_candidates": []
             }
-            self.request_queue.append(queue_item)
-            return {
-                "status": "QUEUED",
-                "message": "No qualified facility or ambulance currently free. Request placed in emergency priority queue.",
-                "request_id": req_id
-            }
+            self.latest_decisions.insert(0, failure_decision)
+            return failure_decision
 
         # Lock Bed and Medicine
         hosp_id = decision.selected_hospital["id"]
@@ -122,7 +190,6 @@ class NetworkStateManager:
         leg2_micro = interpolate_polyline(leg2_raw, sub_steps=6)
         combined_micro = leg1_micro + (leg2_micro[1:] if leg2_micro else [])
 
-        # Total distance
         total_dist_km = decision.ambulance_to_village_path.distance_km + decision.village_to_hospital_path.distance_km
 
         trip_id = f"TRIP_{req_id}"
@@ -138,6 +205,7 @@ class NetworkStateManager:
             "current_step": 0,
             "total_steps": max(len(combined_micro), 1),
             "total_distance_km": total_dist_km,
+            "total_travel_time_mins": decision.total_travel_time_mins,
             "start_time": time.time(),
             "patient_name": patient_name,
             "specialty": specialty_needed,
@@ -215,19 +283,13 @@ class NetworkStateManager:
                 curr_lat, curr_lon = coords[step]
                 prev_lat, prev_lon = coords[step - 1]
                 
-                # Calculate real bearing & distance
                 bearing = calculate_bearing(prev_lat, prev_lon, curr_lat, curr_lon)
-                step_dist = haversine_distance(prev_lat, prev_lon, curr_lat, curr_lon)
-                
-                # Remaining distance
                 rem_steps = len(coords) - step
                 rem_dist = max(0.1, (rem_steps / float(len(coords))) * trip.get("total_distance_km", 15.0))
                 
-                # Realistic speed variation
                 speed = 64.0 + random.uniform(-3.5, 4.0)
                 eta_sec = (rem_dist / max(speed, 20.0)) * 3600.0
                 
-                # Leg indicator
                 is_hospital_transit = step >= trip.get("pickup_step_index", len(coords) // 2)
                 leg_name = "PATIENT → HOSPITAL IN TRANSIT" if is_hospital_transit else "AMBULANCE → VILLAGE PICKUP"
                 
@@ -235,9 +297,7 @@ class NetworkStateManager:
                 self.ambulances[amb_id]["current_lon"] = curr_lon
                 self.ambulances[amb_id]["status"] = "TRANSIT_TO_HOSPITAL" if is_hospital_transit else "EN_ROUTE_PICKUP"
                 
-                # Update live GPS telemetry object
                 trail = coords[:step+1]
-                # Sample trail down to max 30 points for performance
                 sampled_trail = trail[::max(1, len(trail)//30)] if len(trail) > 30 else trail
 
                 self.ambulances[amb_id]["gps_telemetry"] = {
@@ -263,7 +323,12 @@ class NetworkStateManager:
             trip = self.active_trips.pop(trip_id)
             amb_id = trip["ambulance_id"]
             hosp_id = trip["hospital_id"]
+            village_id = trip["village_id"]
             
+            # Record actual trip completion in rolling village stats (Requirement 8)
+            actual_travel_mins = trip.get("total_travel_time_mins", 15.0)
+            self.dispatcher.record_trip_completion(village_id, actual_travel_mins)
+
             self.ambulances[amb_id]["status"] = "IDLE"
             self.ambulances[amb_id]["current_node_id"] = self.hospitals[hosp_id]["node_id"]
             self.ambulances[amb_id]["target_node_id"] = None
@@ -276,6 +341,17 @@ class NetworkStateManager:
                 "speed_kmh": 0.0,
                 "status": "PARKED_AT_HUB"
             }
+
+            # Check if any emergency is waiting in Priority Queue and dispatch it!
+            if self.request_queue:
+                next_emergency = heapq.heappop(self.request_queue)
+                self.dispatch_emergency(
+                    patient_name=next_emergency.patient_name,
+                    village_id=next_emergency.village_id,
+                    urgency_tier=next_emergency.urgency_tier,
+                    specialty_needed=next_emergency.specialty_needed,
+                    medicine_needed=next_emergency.medicine_needed
+                )
 
     def run_prepackaged_scenario(self, scenario_id: int) -> Dict[str, Any]:
         self.reset_to_seed()
@@ -341,15 +417,20 @@ class NetworkStateManager:
                     amb["current_lat"] = node["lat"]
                     amb["current_lon"] = node["lon"]
 
+        # Sort queue by live effective priority
+        live_queue = [q.to_dict() for q in sorted(self.request_queue, key=lambda x: x.calculate_effective_priority(), reverse=True)]
+
         return {
             "graph": self.graph.export_graph_json(),
             "hospitals": list(self.hospitals.values()),
             "villages": list(self.villages.values()),
             "ambulances": list(self.ambulances.values()),
             "active_trips": list(self.active_trips.values()),
-            "request_queue": self.request_queue,
+            "request_queue": live_queue,
             "latest_decisions": self.latest_decisions,
-            "blocked_edges": [f"{min(u,v)}--{max(u,v)}" for u, v in self.graph.blocked_edges]
+            "blocked_edges": [f"{min(u,v)}--{max(u,v)}" for u, v in self.graph.blocked_edges],
+            "village_fairness_stats": self.dispatcher.village_stats,
+            "network_average_wait_mins": self.dispatcher.get_network_average_wait()
         }
 
 state_manager = NetworkStateManager()

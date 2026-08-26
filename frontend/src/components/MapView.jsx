@@ -98,7 +98,8 @@ export default function MapView({
   activeDecision, 
   multiDispatches = [],
   activeVillageIds = [],
-  priorityQueueBanner = null
+  priorityQueueBanner = null,
+  onReportEmergency = null
 }) {
   const mapCenter = [18.5204, 73.8567];
   const [isFollowingGPS, setIsFollowingGPS] = useState(false);
@@ -464,18 +465,25 @@ export default function MapView({
                     <Home className="w-3.5 h-3.5 text-emerald-400" />
                     <span className="font-bold text-xs text-white">{vill.name}</span>
                   </div>
-                  <div className="text-[11px] space-y-1 font-mono">
+                  <div className="text-[11px] space-y-1 font-mono mb-2.5">
                     <div className="flex justify-between">
                       <span className="text-slate-400">Village Population:</span>
                       <strong className="text-white">{vill.population.toLocaleString()}</strong>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-400">Status:</span>
-                      <strong className={isEmergency ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}>
+                      <strong className={isEmergency ? 'text-rose-400 animate-pulse font-bold' : 'text-emerald-400'}>
                         {isEmergency ? '🔴 ACTIVE EMERGENCY' : 'Normal'}
                       </strong>
                     </div>
                   </div>
+
+                  <button
+                    onClick={() => onReportEmergency && onReportEmergency(vill.node_id)}
+                    className="w-full py-2 px-3 bg-gradient-to-r from-rose-600 via-rose-500 to-amber-500 hover:from-rose-500 hover:to-amber-400 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-950/50 flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                  >
+                    <span>🚨 REPORT EMERGENCY</span>
+                  </button>
                 </div>
               </Popup>
               <Tooltip direction="bottom" offset={[0, 18]} opacity={0.95}>
