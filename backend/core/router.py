@@ -9,6 +9,8 @@ class PathResult:
         self.path_nodes = path_nodes or []
         self.total_time_mins = round(total_time_mins, 2)
         self.total_distance_km = round(total_distance_km, 2)
+        self.distance_km = self.total_distance_km
+        self.travel_time_mins = self.total_time_mins
         self.coordinates = coordinates or []
         self.nodes_explored = nodes_explored
         self.execution_ms = round(execution_ms, 3)
@@ -19,6 +21,7 @@ class PathResult:
             "path_nodes": self.path_nodes,
             "total_time_mins": self.total_time_mins,
             "total_distance_km": self.total_distance_km,
+            "distance_km": self.total_distance_km,
             "coordinates": self.coordinates,
             "nodes_explored": self.nodes_explored,
             "execution_ms": self.execution_ms

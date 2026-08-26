@@ -152,6 +152,32 @@ export function useNetworkState() {
     }
   };
 
+  const sendDriverMessage = async (requestId, message, reportRoadBlock = false) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/driver-message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request_id: requestId,
+          message,
+          report_road_block: reportRoadBlock
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Message failed');
+      
+      if (data.decision) {
+        setActiveDecision(data.decision);
+      }
+      
+      showToast(reportRoadBlock ? `🚧 Road blockage reported. A* recalculating detour!` : `💬 Message delivered to driver!`, reportRoadBlock ? 'warning' : 'success');
+      await fetchNetwork();
+      return data;
+    } catch (err) {
+      showToast(`Failed to send message: ${err.message}`, 'error');
+    }
+  };
+
   return {
     networkData,
     isConnected,
@@ -162,6 +188,7 @@ export function useNetworkState() {
     triggerScenario,
     dispatchEmergency,
     toggleRoadBlock,
+    sendDriverMessage,
     resetNetwork,
     runBenchmark,
     fetchNetwork

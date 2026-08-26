@@ -1,15 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { XCircle, ShieldCheck, Activity, FileText, CheckCircle2, Stethoscope, MapPin, Zap, Users, Scale, Clock, Calculator } from 'lucide-react';
+import { 
+  XCircle, ShieldCheck, Activity, FileText, CheckCircle2, Stethoscope, MapPin, 
+  Zap, Users, Scale, Clock, Calculator, Phone, MessageSquare, AlertTriangle, Send, X, Radio
+} from 'lucide-react';
 import { URGENCY_TIERS } from '../utils/constants';
 
-export default function DecisionLog({ activeDecision, multiDispatches = [], selectedMultiIndex = 0, onSelectMultiIndex }) {
+export default function DecisionLog({ 
+  activeDecision, 
+  multiDispatches = [], 
+  selectedMultiIndex = 0, 
+  onSelectMultiIndex,
+  onSendMessage 
+}) {
   const currentDecision = (multiDispatches.length > 0)
     ? (multiDispatches[selectedMultiIndex] || multiDispatches[0])
     : activeDecision;
 
   const [visibleStepCount, setVisibleStepCount] = useState(0);
   const [showRejection, setShowRejection] = useState(false);
+
+  // Driver Communication Modals
+  const [isCallingDriver, setIsCallingDriver] = useState(false);
+  const [isMessageModalOpen, setIsMessageModalOpen] = useState(false);
+  const [selectedQuickMsg, setSelectedQuickMsg] = useState('Road ahead is blocked near village entrance.');
+  const [customMsg, setCustomMsg] = useState('');
+  const [isSending, setIsSending] = useState(false);
+
+  const quickMessages = [
+    { text: 'Road ahead is blocked near village entrance.', isBlockReport: true, icon: '🚧' },
+    { text: 'Patient condition has changed, please hurry.', isBlockReport: false, icon: '🩺' },
+    { text: 'Need immediate oxygen / ALS equipment ready.', isBlockReport: false, icon: '🆘' },
+    { text: 'I am waiting by the main village temple landmark.', isBlockReport: false, icon: '📍' }
+  ];
 
   useEffect(() => {
     if (!currentDecision) {
@@ -40,7 +63,7 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
     return () => {
       timers.forEach(t => clearTimeout(t));
     };
-  }, [currentDecision?.request_id, selectedMultiIndex]);
+  }, [currentDecision?.request_id, selectedMultiIndex, currentDecision?.decision_breadcrumbs?.length]);
 
   if (!currentDecision) {
     return (
@@ -77,8 +100,36 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
   const tier = URGENCY_TIERS[urgency_tier] || URGENCY_TIERS.T2;
   const isAwaitingAmbulance = (status === 'AWAITING_AMBULANCE');
 
+  const driverName = selected_ambulance?.driver_name || 'Rahul Patil';
+  const driverPhone = selected_ambulance?.driver_phone || '+91 90000 12345';
+  const ambPlate = selected_ambulance?.plate || 'MH-12-HE-101';
+  const ambType = selected_ambulance?.type || 'Advanced Life Support (ALS)';
+
+  const handleInitiateCall = () => {
+    setIsCallingDriver(true);
+  };
+
+  const handleSendPatientMessage = async (e) => {
+    e?.preventDefault();
+    const finalMsg = customMsg.trim() || selectedQuickMsg;
+    const isBlock = finalMsg.toLowerCase().includes('blocked');
+
+    setIsSending(true);
+    try {
+      if (onSendMessage) {
+        await onSendMessage(request_id, finalMsg, isBlock);
+      }
+      setIsMessageModalOpen(false);
+      setCustomMsg('');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   return (
-    <div className="h-full flex flex-col bg-[#0a0f1d] overflow-y-auto">
+    <div className="h-full flex flex-col bg-[#0a0f1d] overflow-y-auto relative">
       {/* Multi-Village Influx Patient Selector Tabs */}
       {multiDispatches.length > 1 && (
         <div className="bg-slate-950/90 border-b border-slate-800 p-2 px-3">
@@ -125,7 +176,7 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
             </span>
             <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
-              Why This Route Was Chosen (Decision Reason)
+              Route Decision & Reason (Dispatch Engine)
             </h3>
           </div>
           <span className="text-[10px] font-mono font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-800/60 px-2 py-0.5 rounded-full">
@@ -159,7 +210,7 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
       </motion.div>
 
       <div className="p-4 space-y-4 flex-1">
-        {/* Awaiting Ambulance Alert Card (If Fleet is Full) */}
+        {/* Awaiting Ambulance Alert Card */}
         {isAwaitingAmbulance ? (
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
@@ -180,56 +231,111 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
             </p>
           </motion.div>
         ) : (
-          /* Selected Optimal Candidate Hero Box */
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.35, delay: 0.1 }}
-            className="bg-gradient-to-br from-cyan-950/50 via-slate-900 to-slate-950 border border-cyan-500/40 rounded-2xl p-4 space-y-3 shadow-xl shadow-cyan-950/30"
-          >
-            <div className="flex items-center justify-between pb-2 border-b border-cyan-500/20">
-              <span className="text-xs font-bold text-cyan-300 font-mono flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                Best Hospital & Ambulance Match
-              </span>
-              <span className="text-xs font-mono font-extrabold bg-cyan-500/20 text-cyan-300 px-2.5 py-0.5 rounded-full border border-cyan-500/40">
-                Final Cost: {total_cost_score}
-              </span>
-            </div>
+          <>
+            {/* 1. Assigned Ambulance & Driver Contact Card (Requirement 1, 2, 3, 4) */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-gradient-to-r from-emerald-950/50 via-slate-900 to-cyan-950/50 border border-emerald-500/40 rounded-2xl p-4 space-y-3 shadow-xl shadow-emerald-950/30"
+            >
+              <div className="flex items-center justify-between pb-2 border-b border-emerald-500/20">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🚑</span>
+                  <div>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                      Ambulance Dispatched
+                    </h4>
+                    <span className="text-[10px] text-emerald-400 font-mono font-semibold">
+                      Unit: #{selected_ambulance?.id} ({ambPlate})
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-500/30 flex items-center gap-1">
+                  <Radio className="w-2.5 h-2.5 animate-pulse" /> EN ROUTE
+                </span>
+              </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-              <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+              {/* Driver Details Row */}
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-[9px] text-slate-400 block mb-0.5">ASSIGNED DRIVER</span>
+                  <strong className="text-white text-xs block">{driverName}</strong>
+                  <span className="text-[10px] text-cyan-300 mt-0.5 block">{ambType.split(' ')[0]} Specialist</span>
+                </div>
+
+                <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-[9px] text-slate-400 block mb-0.5">DIRECT CONTACT</span>
+                  <a 
+                    href={`tel:${driverPhone.replace(/\s+/g, '')}`} 
+                    className="text-emerald-400 font-bold text-xs hover:underline block truncate"
+                  >
+                    {driverPhone}
+                  </a>
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">ETA: ~{Math.round(total_travel_time_mins)} mins</span>
+                </div>
+              </div>
+
+              {/* Action Buttons: [ 📞 Contact Driver ] & [ 💬 Send Message ] */}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  onClick={handleInitiateCall}
+                  className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                >
+                  <Phone className="w-3.5 h-3.5 fill-current" />
+                  <span>Contact Driver</span>
+                </button>
+
+                <button
+                  onClick={() => setIsMessageModalOpen(true)}
+                  className="py-2 px-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-cyan-950/50 flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Send Message</span>
+                </button>
+              </div>
+            </motion.div>
+
+            {/* 2. Best Hospital & Ambulance Match Box */}
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.35, delay: 0.1 }}
+              className="bg-gradient-to-br from-cyan-950/50 via-slate-900 to-slate-950 border border-cyan-500/40 rounded-2xl p-4 space-y-3 shadow-xl shadow-cyan-950/30"
+            >
+              <div className="flex items-center justify-between pb-2 border-b border-cyan-500/20">
+                <span className="text-xs font-bold text-cyan-300 font-mono flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                  Target Referral Facility
+                </span>
+                <span className="text-xs font-mono font-extrabold bg-cyan-500/20 text-cyan-300 px-2.5 py-0.5 rounded-full border border-cyan-500/40">
+                  Cost Score: {total_cost_score}
+                </span>
+              </div>
+
+              <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 text-xs">
                 <span className="text-[10px] text-slate-400 font-mono block mb-0.5">SELECTED HOSPITAL</span>
                 <strong className="text-slate-100 text-xs block">{selected_hospital?.name}</strong>
                 <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1 mt-1">
-                  <CheckCircle2 className="w-3 h-3" /> Has Required Specialist Doctor
+                  <CheckCircle2 className="w-3 h-3" /> Has Required {specialty_needed} Specialist
                 </span>
               </div>
 
-              <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-[10px] text-slate-400 font-mono block mb-0.5">DISPATCHED AMBULANCE</span>
-                <strong className="text-slate-100 text-xs block">Ambulance #{selected_ambulance?.id}</strong>
-                <span className="text-[10px] text-cyan-300 font-mono mt-1 block">
-                  {selected_ambulance?.plate} ({selected_ambulance?.type})
-                </span>
+              {/* Transit Time Badges */}
+              <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
+                <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
+                  <span className="text-slate-400">Total Travel:</span>
+                  <strong className="text-cyan-400 font-bold">{total_travel_time_mins} mins</strong>
+                </div>
+                <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
+                  <span className="text-slate-400">Hospital Wait:</span>
+                  <strong className="text-amber-400 font-bold">{triage_wait_time_mins} mins</strong>
+                </div>
               </div>
-            </div>
-
-            {/* Transit Time Badges */}
-            <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
-              <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
-                <span className="text-slate-400">Driving Time:</span>
-                <strong className="text-cyan-400 font-bold">{total_travel_time_mins} mins</strong>
-              </div>
-              <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between">
-                <span className="text-slate-400">Hospital Wait:</span>
-                <strong className="text-amber-400 font-bold">{triage_wait_time_mins} mins</strong>
-              </div>
-            </div>
-          </motion.div>
+            </motion.div>
+          </>
         )}
 
-        {/* Formal Mathematical Cost Breakdown (Requirement 7 & 8) */}
+        {/* 3. Formal Mathematical Cost Breakdown */}
         {cost_breakdown && (
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3.5 space-y-2.5 font-mono text-xs shadow-sm">
             <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
@@ -268,7 +374,6 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
               </div>
             </div>
 
-            {/* Fairness Statistics Indicator (Requirement 8) */}
             <div className="bg-slate-950/40 p-2 rounded-xl border border-slate-800/60 flex items-center justify-between text-[10px]">
               <span className="text-slate-400 flex items-center gap-1">
                 <Scale className="w-3 h-3 text-cyan-400" />
@@ -281,12 +386,12 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
           </div>
         )}
 
-        {/* Step-by-Step Staggered Live Reasoning Breadcrumbs */}
+        {/* 4. Step-by-Step Staggered Live Reasoning Breadcrumbs */}
         <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3.5">
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono flex items-center gap-1.5">
               <FileText className="w-3.5 h-3.5 text-cyan-400" />
-              Step-by-Step System Decision
+              Step-by-Step System Decision & Events
             </h4>
             {visibleStepCount < decision_breadcrumbs.length && (
               <span className="text-[10px] font-mono text-cyan-400 flex items-center gap-1">
@@ -317,7 +422,7 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
           </div>
         </div>
 
-        {/* Why Were Other Facilities Skipped? */}
+        {/* 5. Why Were Other Facilities Skipped? */}
         <AnimatePresence>
           {showRejection && rejected_candidates.length > 0 && (
             <motion.div 
@@ -355,6 +460,153 @@ export default function DecisionLog({ activeDecision, multiDispatches = [], sele
           )}
         </AnimatePresence>
       </div>
+
+      {/* Demo Call Modal (Requirement 3) */}
+      {isCallingDriver && (
+        <div className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-emerald-500/40 rounded-3xl p-6 max-w-sm w-full shadow-2xl text-center space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-16 h-16 rounded-full bg-emerald-600/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto text-2xl animate-pulse">
+              <Phone className="w-8 h-8" />
+            </div>
+            
+            <div>
+              <h4 className="text-sm font-bold text-white">Calling {driverName}...</h4>
+              <p className="text-xs text-emerald-400 font-mono mt-0.5">{driverPhone}</p>
+              <p className="text-[11px] text-slate-400 mt-2">
+                Ambulance #{selected_ambulance?.id} ({ambPlate}) • Connected in Demo Mode
+              </p>
+            </div>
+
+            <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-800 text-[11px] text-slate-300 font-mono text-left space-y-1">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Status:</span>
+                <span className="text-emerald-400 font-bold">Call Active (0:04)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Device Telephony:</span>
+                <a href={`tel:${driverPhone.replace(/\s+/g, '')}`} className="text-cyan-300 underline font-bold">Open Phone App</a>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setIsCallingDriver(false)}
+              className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-950/50 transition-all active:scale-95"
+            >
+              End Call
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Emergency Message & Road Block Report Modal (Requirement 4 & 5) */}
+      {isMessageModalOpen && (
+        <div className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-cyan-500/40 rounded-3xl max-w-md w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-4 border-b border-slate-800 bg-slate-900 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-cyan-600/20 text-cyan-400 border border-cyan-500/30 flex items-center justify-center">
+                  <MessageSquare className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-white font-mono">Message Driver {driverName}</h4>
+                  <span className="text-[10px] text-slate-400 font-mono">Unit #{selected_ambulance?.id} ({ambPlate})</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsMessageModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendPatientMessage} className="p-5 space-y-4 text-xs font-mono">
+              <div>
+                <label className="text-slate-300 font-bold block mb-2">
+                  1. SELECT PREDEFINED EMERGENCY MESSAGE:
+                </label>
+                <div className="space-y-1.5">
+                  {quickMessages.map((qm, idx) => {
+                    const isSelected = selectedQuickMsg === qm.text && !customMsg;
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setSelectedQuickMsg(qm.text);
+                          setCustomMsg('');
+                        }}
+                        className={`w-full p-2.5 rounded-xl border text-left flex items-start gap-2.5 transition-all ${
+                          isSelected
+                            ? 'bg-cyan-950/80 border-cyan-400 text-white shadow-md'
+                            : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="text-base shrink-0">{qm.icon}</span>
+                        <div className="flex-1">
+                          <span className="text-xs font-semibold block">{qm.text}</span>
+                          {qm.isBlockReport && (
+                            <span className="text-[9px] text-amber-300 block mt-0.5">
+                              ⚠️ Triggers automatic A* road rerouting
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-bold block mb-1">
+                  2. OR WRITE CUSTOM MESSAGE:
+                </label>
+                <input
+                  type="text"
+                  value={customMsg}
+                  onChange={(e) => setCustomMsg(e.target.value)}
+                  placeholder="e.g. Landslide near forest entrance, road is impassable"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-sans"
+                />
+              </div>
+
+              {/* Reroute Warning Banner if Blocked */}
+              {(customMsg.toLowerCase().includes('blocked') || (selectedQuickMsg.includes('blocked') && !customMsg)) && (
+                <div className="bg-amber-950/30 border border-amber-500/40 rounded-xl p-2.5 flex items-center gap-2 text-[10px] text-amber-300">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 animate-pulse" />
+                  <span>
+                    <strong>Dynamic Rerouting Enabled:</strong> Graph engine will mark the road as BLOCKED and run A* search for the fastest detour.
+                  </span>
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsMessageModalOpen(false)}
+                  className="px-4 py-2 text-xs text-slate-400 hover:text-white bg-slate-900 rounded-xl border border-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSending}
+                  className="px-5 py-2 text-xs font-bold text-white bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-xl shadow-lg shadow-cyan-950/50 flex items-center gap-1.5 active:scale-95 disabled:opacity-50"
+                >
+                  {isSending ? (
+                    <span>Transmitting & Rerouting...</span>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Transmit Message to Driver</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

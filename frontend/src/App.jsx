@@ -20,6 +20,7 @@ export default function App() {
     triggerScenario,
     dispatchEmergency,
     toggleRoadBlock,
+    sendDriverMessage,
     resetNetwork,
     runBenchmark
   } = useNetworkState();
@@ -252,6 +253,7 @@ export default function App() {
                     multiDispatches={multiDispatches}
                     selectedMultiIndex={selectedMultiIndex}
                     onSelectMultiIndex={setSelectedMultiIndex}
+                    onSendMessage={sendDriverMessage}
                   />
                 ) : (
                   <Telemetry networkData={networkData} />

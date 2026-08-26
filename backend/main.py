@@ -76,6 +76,11 @@ class RoadBlockRequest(BaseModel):
     v: str = Field(..., example="J_EAST_2")
     blocked: bool = Field(default=True, example=True)
 
+class DriverMessageRequest(BaseModel):
+    request_id: str = Field(..., example="REQ_123")
+    message: str = Field(..., example="Road ahead is blocked near village entrance.")
+    report_road_block: bool = Field(default=False, example=False)
+
 class BenchmarkRequest(BaseModel):
     node_count: int = Field(default=50000, ge=1000, le=100000, example=50000)
     query_count: int = Field(default=20, ge=1, le=100, example=20)
@@ -113,6 +118,11 @@ def run_scenario(scenario_id: int):
 @app.post("/api/block-road")
 def toggle_road(req: RoadBlockRequest):
     result = state_manager.toggle_road_block(req.u, req.v, req.blocked)
+    return result
+
+@app.post("/api/driver-message")
+def handle_driver_message(req: DriverMessageRequest):
+    result = state_manager.send_patient_message(req.request_id, req.message, req.report_road_block)
     return result
 
 @app.post("/api/reset")

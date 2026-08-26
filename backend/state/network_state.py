@@ -190,7 +190,7 @@ class NetworkStateManager:
         leg2_micro = interpolate_polyline(leg2_raw, sub_steps=6)
         combined_micro = leg1_micro + (leg2_micro[1:] if leg2_micro else [])
 
-        total_dist_km = decision.ambulance_to_village_path.distance_km + decision.village_to_hospital_path.distance_km
+        total_dist_km = getattr(decision.ambulance_to_village_path, 'total_distance_km', 0.0) + getattr(decision.village_to_hospital_path, 'total_distance_km', 0.0)
 
         trip_id = f"TRIP_{req_id}"
         self.active_trips[trip_id] = {
@@ -246,6 +246,84 @@ class NetworkStateManager:
             print(f"Error logging to SQLite: {e}")
 
         return dec_dict
+
+    def send_patient_message(self, request_id: str, message: str, report_road_block: bool = False) -> Dict[str, Any]:
+        target_decision = None
+        for dec in self.latest_decisions:
+            if dec.get("request_id") == request_id:
+                target_decision = dec
+                break
+        if not target_decision and self.latest_decisions:
+            target_decision = self.latest_decisions[0]
+
+        if not target_decision:
+            return {"status": "ERROR", "message": "No active emergency call found"}
+
+        amb = target_decision.get("selected_ambulance", {})
+        driver_name = amb.get("driver_name", "Rahul Patil")
+        driver_phone = amb.get("driver_phone", "+91 90000 12345")
+        amb_id = amb.get("id", "AMB_1")
+        village_id = target_decision.get("village_id", "NODE_VILL_A")
+        village_name = target_decision.get("village_name", "Village")
+
+        breadcrumbs = target_decision.setdefault("decision_breadcrumbs", [])
+        step_num = len(breadcrumbs) + 1
+
+        breadcrumbs.append({
+            "step": step_num,
+            "title": f"💬 Patient Emergency Message to Driver {driver_name}",
+            "detail": f'Patient reported: "{message}"'
+        })
+
+        if report_road_block or "blocked" in message.lower():
+            village_edges = [edge for edge in self.graph.edges if (edge.source == village_id or edge.target == village_id) and not edge.blocked]
+            
+            block_u, block_v = None, None
+            if village_edges:
+                first_edge = village_edges[0]
+                block_u, block_v = first_edge.source, first_edge.target
+            else:
+                block_u, block_v = "J_EAST_1", "J_EAST_2"
+
+            self.graph.block_edge(block_u, block_v, blocked=True)
+
+            hosp_id = target_decision.get("selected_hospital", {}).get("id", "HOSP_C")
+            hosp_node = self.hospitals.get(hosp_id, {}).get("node_id", "NODE_HOSP_C")
+            current_amb_node = self.ambulances.get(amb_id, {}).get("current_node_id", "J_CENTRAL")
+            
+            new_path_amb_to_vil = self.router.a_star_search(current_amb_node, village_id)
+            new_path_vil_to_hosp = self.router.a_star_search(village_id, hosp_node)
+
+            trip_id = f"TRIP_{request_id}"
+            if trip_id in self.active_trips:
+                leg1_micro = interpolate_polyline(new_path_amb_to_vil.coordinates, sub_steps=6)
+                leg2_micro = interpolate_polyline(new_path_vil_to_hosp.coordinates, sub_steps=6)
+                combined_micro = leg1_micro + (leg2_micro[1:] if leg2_micro else [])
+                
+                self.active_trips[trip_id]["coords"] = combined_micro
+                self.active_trips[trip_id]["current_step"] = 0
+                self.active_trips[trip_id]["total_steps"] = max(len(combined_micro), 1)
+
+            target_decision["ambulance_to_village"] = new_path_amb_to_vil.to_dict()
+            target_decision["village_to_hospital"] = new_path_vil_to_hosp.to_dict()
+            target_decision["total_travel_time_mins"] = round(new_path_amb_to_vil.total_time_mins + new_path_vil_to_hosp.total_time_mins, 2)
+
+            breadcrumbs.append({
+                "step": step_num + 1,
+                "title": f"🚧 Road Obstruction Confirmed ({block_u} ↔ {block_v})",
+                "detail": f"Road segment near {village_name} marked as BLOCKED in topological graph."
+            })
+            breadcrumbs.append({
+                "step": step_num + 2,
+                "title": "⚡ A* Search Recalculation & Driver Rerouted",
+                "detail": f"Computed bypass route. New travel time: {target_decision['total_travel_time_mins']} mins. Dispatched live navigation update to Driver {driver_name} ({driver_phone})."
+            })
+
+        return {
+            "status": "SUCCESS",
+            "message": f"Message sent to Driver {driver_name}",
+            "decision": target_decision
+        }
 
     def toggle_road_block(self, u: str, v: str, blocked: bool) -> Dict[str, Any]:
         self.graph.block_edge(u, v, blocked=blocked)

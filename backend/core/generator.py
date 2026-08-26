@@ -204,6 +204,8 @@ def generate_district_network() -> Tuple[RoadGraph, Dict[str, Any], Dict[str, An
         "AMB_1": {
             "id": "AMB_1",
             "plate": "MH-12-HE-101",
+            "driver_name": "Rahul Patil",
+            "driver_phone": "+91 90000 12345",
             "type": "Advanced Life Support (ALS)",
             "status": "IDLE",
             "current_node_id": "NODE_HOSP_B",
@@ -214,6 +216,8 @@ def generate_district_network() -> Tuple[RoadGraph, Dict[str, Any], Dict[str, An
         "AMB_2": {
             "id": "AMB_2",
             "plate": "MH-12-HE-102",
+            "driver_name": "Suresh Deshmukh",
+            "driver_phone": "+91 90000 23456",
             "type": "Basic Life Support (BLS)",
             "status": "IDLE",
             "current_node_id": "J_CENTRAL",
@@ -224,6 +228,8 @@ def generate_district_network() -> Tuple[RoadGraph, Dict[str, Any], Dict[str, An
         "AMB_3": {
             "id": "AMB_3",
             "plate": "MH-12-HE-103",
+            "driver_name": "Vikram More",
+            "driver_phone": "+91 90000 34567",
             "type": "Advanced Life Support (ALS)",
             "status": "IDLE",
             "current_node_id": "NODE_HOSP_C",
@@ -234,6 +240,8 @@ def generate_district_network() -> Tuple[RoadGraph, Dict[str, Any], Dict[str, An
         "AMB_4": {
             "id": "AMB_4",
             "plate": "MH-12-HE-104",
+            "driver_name": "Amit Shinde",
+            "driver_phone": "+91 90000 45678",
             "type": "Basic Life Support (BLS)",
             "status": "IDLE",
             "current_node_id": "NODE_HOSP_NORTH",
