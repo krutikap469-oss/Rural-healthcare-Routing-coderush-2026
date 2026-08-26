@@ -1,7 +1,18 @@
-import React, { useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip } from 'react-leaflet';
+import React, { useMemo, useState, useEffect } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { Navigation, Building2, Home, Sparkles, Layers, ArrowRight } from 'lucide-react';
+import { Navigation, Building2, Home, Sparkles, Layers, ArrowRight, Radio, Compass, Gauge, Clock, Eye, Crosshair } from 'lucide-react';
+
+// Sub-component to smoothly pan map when Auto-Follow GPS is active
+function MapFollowController({ targetCoords, isFollowing }) {
+  const map = useMap();
+  useEffect(() => {
+    if (isFollowing && targetCoords && targetCoords[0] && targetCoords[1]) {
+      map.panTo(targetCoords, { animate: true, duration: 0.6 });
+    }
+  }, [targetCoords, isFollowing, map]);
+  return null;
+}
 
 const createHospitalIcon = (isApex = false, availableBeds = 10) => {
   return L.divIcon({
@@ -45,29 +56,37 @@ const createVillageIcon = (isEmergency = false, label = '') => {
   });
 };
 
-const createAmbulanceIcon = (status = 'IDLE', ambId = 1) => {
-  const isEnRoute = status.startsWith('EN_ROUTE');
+const createAmbulanceIcon = (status = 'IDLE', ambId = 1, speed = 0, heading = 0) => {
+  const isEnRoute = status.startsWith('EN_ROUTE') || status.startsWith('TRANSIT');
   return L.divIcon({
     className: 'custom-amb-icon',
     html: `
       <div class="relative flex items-center justify-center cursor-pointer transition-transform hover:scale-125">
-        ${isEnRoute ? '<div class="absolute -inset-3 rounded-full bg-amber-400/50 animate-ping"></div>' : ''}
-        <div class="w-9 h-9 rounded-full ${isEnRoute ? 'bg-gradient-to-tr from-amber-500 to-rose-500 ring-2 ring-amber-200 shadow-amber-500/50' : 'bg-blue-600 ring-1 ring-blue-300 shadow-lg'} flex items-center justify-center text-white shadow-2xl">
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        ${isEnRoute ? '<div class="absolute -inset-3 rounded-full bg-cyan-400/40 animate-ping"></div>' : ''}
+        ${isEnRoute ? '<div class="absolute -inset-1.5 rounded-full border border-cyan-400/60 animate-spin"></div>' : ''}
+        
+        <div class="w-10 h-10 rounded-full ${isEnRoute ? 'bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 ring-2 ring-cyan-300 shadow-cyan-500/60' : 'bg-blue-600 ring-1 ring-blue-300 shadow-lg'} flex items-center justify-center text-white shadow-2xl relative">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-4.5 h-4.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1 .4-1 1v7c0 .6.4 1 1 1h2"/>
             <circle cx="7" cy="17" r="2"/>
             <path d="M9 17h6"/>
             <circle cx="17" cy="17" r="2"/>
           </svg>
+          
+          ${isEnRoute ? `
+            <div style="transform: rotate(${heading}deg)" class="absolute -top-2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[8px] border-b-cyan-300 drop-shadow-md"></div>
+          ` : ''}
         </div>
-        <span class="absolute -top-1 -right-1 bg-slate-900 text-cyan-300 text-[8px] font-mono font-bold px-1 rounded border border-cyan-500">
-          #${ambId}
-        </span>
+        
+        <div class="absolute -bottom-3 flex items-center gap-0.5 bg-slate-950/95 border border-cyan-500/80 px-1.5 py-0.2 rounded-full shadow-lg">
+          <span class="text-[8px] font-mono font-bold text-cyan-300">#${ambId}</span>
+          ${isEnRoute ? `<span class="text-[8px] font-mono text-emerald-400 font-bold">${Math.round(speed)}k</span>` : ''}
+        </div>
       </div>
     `,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
-    popupAnchor: [0, -20]
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+    popupAnchor: [0, -22]
   });
 };
 
@@ -82,8 +101,23 @@ export default function MapView({
   priorityQueueBanner = null
 }) {
   const mapCenter = [18.5204, 73.8567];
+  const [isFollowingGPS, setIsFollowingGPS] = useState(false);
 
-  // Compile active routes (supports single activeDecision or multiple dispatches in Mass Influx)
+  const { graph, hospitals = [], villages = [], ambulances = [] } = networkData || {};
+  const edges = graph?.edges || [];
+
+  // Active driving ambulance for primary GPS HUD
+  const activeAmbulance = useMemo(() => {
+    return ambulances.find(a => a.status !== 'IDLE' && a.gps_telemetry?.active) || ambulances.find(a => a.status !== 'IDLE') || null;
+  }, [ambulances]);
+
+  const followCoords = useMemo(() => {
+    if (activeAmbulance && activeAmbulance.current_lat && activeAmbulance.current_lon) {
+      return [activeAmbulance.current_lat, activeAmbulance.current_lon];
+    }
+    return mapCenter;
+  }, [activeAmbulance]);
+
   const renderedRoutes = useMemo(() => {
     if (multiDispatches && multiDispatches.length > 0) {
       return multiDispatches.map((disp, idx) => ({
@@ -116,12 +150,11 @@ export default function MapView({
     );
   }
 
-  const { graph, hospitals = [], villages = [], ambulances = [] } = networkData;
-  const edges = graph?.edges || [];
+  const gps = activeAmbulance?.gps_telemetry;
 
   return (
     <div className="relative h-full w-full overflow-hidden select-none">
-      {/* Priority Queue Ranking HUD (Visualizes the 400ms ranked triage before ambulance departure) */}
+      {/* Priority Queue Ranking HUD */}
       {priorityQueueBanner && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] bg-[#0a0f1d]/95 backdrop-blur-xl border border-cyan-500/60 rounded-2xl px-4 py-2.5 shadow-2xl shadow-cyan-950/80 animate-in fade-in slide-in-from-top-4 duration-300 max-w-xl w-[90%] pointer-events-auto">
           <div className="flex items-center justify-between gap-2 mb-1.5 pb-1 border-b border-cyan-500/20">
@@ -150,12 +183,107 @@ export default function MapView({
         </div>
       )}
 
+      {/* Live GPS Satellite Tracking Telemetry HUD Card (Top-Left / Top-Right Floating) */}
+      {activeAmbulance && gps && (
+        <div className="absolute top-4 right-4 z-[1000] bg-[#0a0f1d]/95 backdrop-blur-xl border border-cyan-500/50 rounded-2xl p-3.5 shadow-2xl shadow-cyan-950/80 text-[11px] text-slate-300 font-mono space-y-2.5 pointer-events-auto w-72 animate-in fade-in slide-in-from-right duration-300">
+          {/* Header */}
+          <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+            <div className="flex items-center gap-1.5">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="font-bold text-white text-xs">🛰️ Live GPS Telemetry</span>
+            </div>
+            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-1.5 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1">
+              <Radio className="w-2.5 h-2.5 animate-pulse" /> 11 SATS
+            </span>
+          </div>
+
+          {/* Vehicle Info */}
+          <div className="space-y-1">
+            <div className="flex justify-between items-center text-xs">
+              <strong className="text-white">Ambulance #{activeAmbulance.id}</strong>
+              <span className="text-cyan-300 font-bold">{activeAmbulance.plate}</span>
+            </div>
+            <div className="text-[10px] text-slate-400 flex items-center justify-between">
+              <span>Patient: <strong className="text-slate-200">{gps.patient_name || 'En Route'}</strong></span>
+              <span className="text-amber-300 font-bold">{activeAmbulance.type}</span>
+            </div>
+          </div>
+
+          {/* Gauges Grid */}
+          <div className="grid grid-cols-2 gap-2 bg-slate-950/80 p-2 rounded-xl border border-slate-800">
+            <div className="flex items-center gap-1.5">
+              <Gauge className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <div>
+                <span className="text-[9px] text-slate-500 block">SPEED</span>
+                <strong className="text-white text-xs">{gps.speed_kmh} <span className="text-[9px] font-normal text-slate-400">km/h</span></strong>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <Compass className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <div>
+                <span className="text-[9px] text-slate-500 block">HEADING</span>
+                <strong className="text-white text-xs">{gps.heading_deg}° <span className="text-[9px] font-normal text-slate-400">BRG</span></strong>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <div>
+                <span className="text-[9px] text-slate-500 block">REMAINING</span>
+                <strong className="text-white text-xs">{gps.distance_remaining_km} <span className="text-[9px] font-normal text-slate-400">km</span></strong>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <div>
+                <span className="text-[9px] text-slate-500 block">EST. TIME</span>
+                <strong className="text-cyan-300 text-xs font-bold">{Math.floor(gps.eta_seconds / 60)}m {gps.eta_seconds % 60}s</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Trip Progress Bar */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-[9px] text-slate-400">
+              <span>{gps.current_leg}</span>
+              <span className="text-cyan-400 font-bold">{gps.progress_pct}%</span>
+            </div>
+            <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-emerald-400 transition-all duration-500"
+                style={{ width: `${gps.progress_pct}%` }}
+              ></div>
+            </div>
+          </div>
+
+          {/* Camera Auto-Follow Toggle Button */}
+          <button
+            onClick={() => setIsFollowingGPS(!isFollowingGPS)}
+            className={`w-full py-1.5 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-sm ${
+              isFollowingGPS
+                ? 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-950'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'
+            }`}
+          >
+            <Crosshair className={`w-3.5 h-3.5 ${isFollowingGPS ? 'animate-spin text-white' : 'text-cyan-400'}`} />
+            <span>{isFollowingGPS ? '✓ GPS Auto-Follow Locked' : '📍 Track Ambulance with Camera'}</span>
+          </button>
+        </div>
+      )}
+
       <MapContainer
         center={mapCenter}
         zoom={12}
         scrollWheelZoom={true}
         className="h-full w-full"
       >
+        <MapFollowController targetCoords={followCoords} isFollowing={isFollowingGPS} />
+
         <TileLayer
           attribution='&copy; <a href="https://carto.com/">CARTO</a>'
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
@@ -222,7 +350,7 @@ export default function MapView({
           );
         })}
 
-        {/* 2. Dispatched Route Overlays (Concurrent Multi-Route Support) */}
+        {/* 2. Dispatched Route Overlays */}
         {renderedRoutes.map((rt) => (
           <React.Fragment key={rt.id}>
             {rt.leg1.length > 0 && (
@@ -249,7 +377,24 @@ export default function MapView({
           </React.Fragment>
         ))}
 
-        {/* 3. Hospital Nodes */}
+        {/* 3. Live GPS Driven Breadcrumb Trails */}
+        {ambulances.map((amb) => {
+          const trail = amb.gps_telemetry?.trail;
+          if (!trail || trail.length < 2) return null;
+          return (
+            <Polyline
+              key={`trail-${amb.id}`}
+              positions={trail}
+              pathOptions={{
+                color: '#22d3ee',
+                weight: 4,
+                opacity: 0.85
+              }}
+            />
+          );
+        })}
+
+        {/* 4. Hospital Nodes */}
         {hospitals.map((hosp) => {
           const isApex = hosp.id === 'HOSP_C';
           return (
@@ -302,7 +447,7 @@ export default function MapView({
           );
         })}
 
-        {/* 4. Village Nodes (with Influx Ripple State) */}
+        {/* 5. Village Nodes */}
         {villages.map((vill) => {
           const isEmergency = activeVillageIds.includes(vill.node_id) || (activeDecision && activeDecision.village_id === vill.node_id);
           const emergencyIndex = activeVillageIds.indexOf(vill.node_id);
@@ -340,18 +485,20 @@ export default function MapView({
           );
         })}
 
-        {/* 5. Moving Ambulance Markers */}
+        {/* 6. Live Moving Ambulances with Directional Compass & Speed */}
         {ambulances.map((amb) => {
           const lat = amb.current_lat || mapCenter[0];
           const lon = amb.current_lon || mapCenter[1];
+          const speed = amb.gps_telemetry?.speed_kmh || 0;
+          const heading = amb.gps_telemetry?.heading_deg || 0;
           return (
             <Marker
               key={amb.id}
               position={[lat, lon]}
-              icon={createAmbulanceIcon(amb.status, amb.id)}
+              icon={createAmbulanceIcon(amb.status, amb.id, speed, heading)}
             >
               <Popup>
-                <div className="p-1 min-w-[210px] text-slate-100 font-sans">
+                <div className="p-1 min-w-[220px] text-slate-100 font-sans">
                   <div className="flex items-center justify-between font-bold text-xs mb-1.5 pb-1 border-b border-slate-700">
                     <span className="text-white">🚑 Ambulance #{amb.id}</span>
                     <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-800">
@@ -360,8 +507,16 @@ export default function MapView({
                   </div>
                   <div className="text-[11px] space-y-1 font-mono">
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Vehicle Type:</span>
+                      <span className="text-slate-400">Equipment:</span>
                       <strong className="text-white">{amb.type}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">GPS Speed:</span>
+                      <strong className="text-emerald-400 font-bold">{speed} km/h</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Heading:</span>
+                      <strong className="text-cyan-300 font-bold">{heading}°</strong>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-400">Status:</span>
@@ -379,7 +534,7 @@ export default function MapView({
               </Popup>
               <Tooltip direction="top" offset={[0, -22]} opacity={0.95}>
                 <span className="font-mono text-xs font-bold text-cyan-300">
-                  🚑 #{amb.id} ({amb.status === 'IDLE' ? 'Ready' : 'Driving'})
+                  🚑 #{amb.id} ({amb.status === 'IDLE' ? 'Ready' : `${Math.round(speed)} km/h • Driving`})
                 </span>
               </Tooltip>
             </Marker>

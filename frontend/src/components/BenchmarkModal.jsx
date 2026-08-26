@@ -24,7 +24,7 @@ export default function BenchmarkModal({ isOpen, onClose, onRunBenchmark }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
       <div className="bg-[#0f172a] border border-cyan-500/40 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
         <div className="p-4 md:p-5 border-b border-slate-800 bg-slate-900/90 flex items-center justify-between">
